@@ -1,0 +1,83 @@
+#!/bin/bash
+
+# Etapa de Requisição de dados
+read -p "Qual username utilizar? " username
+read -s -p "Qual senha utilizar para esse username? " password
+echo
+read -p "Qual SSID do wifi? " ssid
+read -s -p "Qual senha do wifi? " wifi_password
+echo
+
+# Etapa de dados técnicos
+lsblk
+echo
+read -p "Qual o nome do disco a ser utilizado? (ex: /dev/nvme0n1) " disk
+echo
+echo "Criando partições..."
+parted $disk --script mklabel gpt \
+  mkpart ESP fat32 1MiB 551MiB \
+  set 1 boot on \
+  mkpart primary linux-swap 551MiB 2551MiB \
+  mkpart primary ext4 2551MiB 62.5GB \
+  mkpart primary ext4 62.5GB 100%
+echo "Formantando partições..."
+mkfs.fat -F32 ${disk}1
+mkswap ${disk}2
+mkfs.ext4 ${disk}3
+mkfs.ext4 ${disk}4
+
+# Montando as partições
+mount ${disk}3 /mnt
+mkdir /mnt/boot
+mount ${disk}1 /mnt/boot
+mkdir /mnt/home
+mount ${disk}4 /mnt/home
+swapon ${disk}2
+
+# Configurações
+echo "Configurando teclado..."
+loadkeys uk
+echo "Configurando lingua..."
+echo "pt_BR.UTF-8 UTF-8" >> /etc/locale.gen
+echo "LANG=pt_BR.UTF-8" > /etc/locale.conf
+locale-gen
+echo "Configurando timezone..."
+ln -sf /usr/share/zoneinfo/America/Sao_Paulo /etc/localtime
+hwclock --systohc
+echo "Configurando hostname..."
+read -p "Qual o nome do computador? " hostname
+echo $hostname > /etc/hostname
+echo "127.0.0.1	localhost" >> /etc/hosts
+echo "::1		localhost" >> /etc/hosts
+echo "127.0.1.1	${hostname}.localdomain	${hostname}" >> /etc/hosts
+echo "Adicionando $username ao grupo sudoers"
+echo "$username ALL=(ALL) ALL" >> /etc/sudoers.d/$username
+
+# Atualizar Arch Linux Keyring
+pacman -Sy --noconfirm archlinux-keyring
+
+# Instalar Softwares necessários
+echo "Instalando softwares necessários..."
+pacstrap /mnt base base-devel linux-zen linux-zen-headers refind-efi plasma-desktop networkmanager dhcpcd xorg-server xorg-xinit steam-native discord-canary nano amdgpu amd-ucode
+
+# Gerando fstab
+echo "Gerando fstab..."
+genfstab -U /mnt >> /mnt/etc/fstab
+
+# Configurar Wifi
+echo "Configurando wifi..."
+read -p "Qual o nome da interface wifi? " wifi_interface
+cat > /mnt/etc/netctl/$ssid <<EOF
+Description='Automatically generated profile by wifi-menu'
+Interface=$wifi_interface
+Connection=wireless
+Security=wpa
+ESSID='$ssid'
+IP=dhcp
+Key='$wifi_password'
+EOF
+arch-chroot /mnt netctl enable $ssid
+
+# Habilitar serviços
+echo "Habilitando serviços..."
+arch-chroot /mnt systemctl enable dhcpc
